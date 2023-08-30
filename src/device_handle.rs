@@ -342,6 +342,42 @@ impl<T: UsbContext> DeviceHandle<T> {
         if endpoint & LIBUSB_ENDPOINT_DIR_MASK != LIBUSB_ENDPOINT_IN {
             return Err(Error::InvalidParam);
         }
+        unsafe { self.read_interrupt_unchecked(endpoint, buf, timeout) }
+    }
+
+    /// Reads from an interrupt endpoint.
+    ///
+    /// This function attempts to read from the interrupt endpoint with the address given by the
+    /// `endpoint` parameter and fills `buf` with any data received from the endpoint. The function
+    /// blocks up to the amount of time specified by `timeout`. Minimal `timeout` is 1 milliseconds,
+    /// anything smaller will result in an infinite block.
+    ///
+    /// If the return value is `Ok(n)`, then `buf` is populated with `n` bytes of data received
+    /// from the endpoint.
+    ///
+    /// # Safety
+    ///
+    /// Does not check the direction of the endpoint.
+    ///
+    /// ## Errors
+    ///
+    /// If this function encounters any form of error while fulfilling the transfer request, an
+    /// error variant will be returned. If an error variant is returned, no bytes were read.
+    ///
+    /// The errors returned by this function include:
+    ///
+    /// * `InvalidParam` if the endpoint is not an input endpoint.
+    /// * `Timeout` if the transfer timed out.
+    /// * `Pipe` if the endpoint halted.
+    /// * `Overflow` if the device offered more data.
+    /// * `NoDevice` if the device has been disconnected.
+    /// * `Io` if the transfer encountered an I/O error.
+    pub unsafe fn read_interrupt_unchecked(
+        &self,
+        endpoint: u8,
+        buf: &mut [u8],
+        timeout: Duration,
+    ) -> crate::Result<usize> {
         let mut transferred = mem::MaybeUninit::<c_int>::uninit();
         unsafe {
             match libusb_interrupt_transfer(
@@ -396,6 +432,39 @@ impl<T: UsbContext> DeviceHandle<T> {
         if endpoint & LIBUSB_ENDPOINT_DIR_MASK != LIBUSB_ENDPOINT_OUT {
             return Err(Error::InvalidParam);
         }
+        unsafe { self.write_interrupt_unchecked(endpoint, buf, timeout) }
+    }
+
+    /// Writes to an interrupt endpoint.
+    ///
+    /// This function attempts to write the contents of `buf` to the interrupt endpoint with the
+    /// address given by the `endpoint` parameter. The function blocks up to the amount of time
+    /// specified by `timeout`. Minimal `timeout` is 1 milliseconds, anything smaller will
+    /// result in an infinite block.
+    ///
+    /// If the return value is `Ok(n)`, then `n` bytes of `buf` were written to the endpoint.
+    ///
+    /// # Safety
+    ///
+    /// Does not check the direction of the endpoint.
+    ///
+    /// ## Errors
+    ///
+    /// If this function encounters any form of error while fulfilling the transfer request, an
+    /// error variant will be returned. If an error variant is returned, no bytes were written.
+    ///
+    /// The errors returned by this function include:
+    ///
+    /// * `Timeout` if the transfer timed out.
+    /// * `Pipe` if the endpoint halted.
+    /// * `NoDevice` if the device has been disconnected.
+    /// * `Io` if the transfer encountered an I/O error.
+    pub unsafe fn write_interrupt_unchecked(
+        &self,
+        endpoint: u8,
+        buf: &[u8],
+        timeout: Duration,
+    ) -> crate::Result<usize> {
         let mut transferred = mem::MaybeUninit::<c_int>::uninit();
         unsafe {
             match libusb_interrupt_transfer(
@@ -501,27 +570,59 @@ impl<T: UsbContext> DeviceHandle<T> {
         if endpoint & LIBUSB_ENDPOINT_DIR_MASK != LIBUSB_ENDPOINT_OUT {
             return Err(Error::InvalidParam);
         }
+        unsafe { self.write_bulk_unchecked(endpoint, buf, timeout) }
+    }
+
+    /// Writes to a bulk endpoint.
+    ///
+    /// This function attempts to write the contents of `buf` to the bulk endpoint with the address
+    /// given by the `endpoint` parameter. The function blocks up to the amount of time specified
+    /// by `timeout`. Minimal `timeout` is 1 milliseconds, anything smaller will result in an
+    /// infinite block.
+    ///
+    /// If the return value is `Ok(n)`, then `n` bytes of `buf` were written to the endpoint.
+    ///
+    /// # Safety
+    ///
+    /// Does not check the direction of the endpoint.
+    ///
+    /// ## Errors
+    ///
+    /// If this function encounters any form of error while fulfilling the transfer request, an
+    /// error variant will be returned. If an error variant is returned, no bytes were written.
+    ///
+    /// The errors returned by this function include:
+    ///
+    /// * `InvalidParam` if the endpoint is not an output endpoint.
+    /// * `Timeout` if the transfer timed out.
+    /// * `Pipe` if the endpoint halted.
+    /// * `NoDevice` if the device has been disconnected.
+    /// * `Io` if the transfer encountered an I/O error.
+    pub unsafe fn write_bulk_unchecked(
+        &self,
+        endpoint: u8,
+        buf: &[u8],
+        timeout: Duration,
+    ) -> crate::Result<usize> {
         let mut transferred = mem::MaybeUninit::<c_int>::uninit();
-        unsafe {
-            match libusb_bulk_transfer(
-                self.as_raw(),
-                endpoint,
-                buf.as_ptr() as *mut c_uchar,
-                buf.len() as c_int,
-                transferred.as_mut_ptr(),
-                timeout.as_millis() as c_uint,
-            ) {
-                0 => Ok(transferred.assume_init() as usize),
-                err if err == LIBUSB_ERROR_INTERRUPTED || err == LIBUSB_ERROR_TIMEOUT => {
-                    let transferred = transferred.assume_init();
-                    if transferred > 0 {
-                        Ok(transferred as usize)
-                    } else {
-                        Err(error::from_libusb(err))
-                    }
+        match libusb_bulk_transfer(
+            self.as_raw(),
+            endpoint,
+            buf.as_ptr() as *mut c_uchar,
+            buf.len() as c_int,
+            transferred.as_mut_ptr(),
+            timeout.as_millis() as c_uint,
+        ) {
+            0 => Ok(transferred.assume_init() as usize),
+            err if err == LIBUSB_ERROR_INTERRUPTED || err == LIBUSB_ERROR_TIMEOUT => {
+                let transferred = transferred.assume_init();
+                if transferred > 0 {
+                    Ok(transferred as usize)
+                } else {
+                    Err(error::from_libusb(err))
                 }
-                err => Err(error::from_libusb(err)),
             }
+            err => Err(error::from_libusb(err)),
         }
     }
 
@@ -565,18 +666,59 @@ impl<T: UsbContext> DeviceHandle<T> {
         if request_type & LIBUSB_ENDPOINT_DIR_MASK != LIBUSB_ENDPOINT_IN {
             return Err(Error::InvalidParam);
         }
-        let res = unsafe {
-            libusb_control_transfer(
-                self.as_raw(),
-                request_type,
-                request,
-                value,
-                index,
-                buf.as_mut_ptr() as *mut c_uchar,
-                buf.len() as u16,
-                timeout.as_millis() as c_uint,
-            )
-        };
+        unsafe { self.read_control_unchecked(request_type, request, value, index, buf, timeout) }
+    }
+
+    /// Reads data using a control transfer.
+    ///
+    /// This function attempts to read data from the device using a control transfer and fills
+    /// `buf` with any data received during the transfer. The function blocks up to the amount of
+    /// time specified by `timeout`. Minimal `timeout` is 1 milliseconds, anything smaller will
+    /// result in an infinite block.
+    ///
+    /// The parameters `request_type`, `request`, `value`, and `index` specify the fields of the
+    /// control transfer setup packet (`bmRequestType`, `bRequest`, `wValue`, and `wIndex`
+    /// respectively). The values for each of these parameters shall be given in host-endian byte
+    /// order. The value for the `request_type` parameter can be built with the helper function,
+    /// [request_type()](fn.request_type.html). The meaning of the other parameters depends on the
+    /// type of control request.
+    ///
+    /// If the return value is `Ok(n)`, then `buf` is populated with `n` bytes of data.
+    ///
+    /// # Safety
+    ///
+    /// Does not check the direction of the endpoint.
+    ///
+    /// ## Errors
+    ///
+    /// If this function encounters any form of error while fulfilling the transfer request, an
+    /// error variant will be returned. If an error variant is returned, no bytes were read.
+    ///
+    /// The errors returned by this function include:
+    ///
+    /// * `Timeout` if the transfer timed out.
+    /// * `Pipe` if the control request was not supported by the device.
+    /// * `NoDevice` if the device has been disconnected.
+    /// * `Io` if the transfer encountered an I/O error.
+    pub unsafe fn read_control_unchecked(
+        &self,
+        request_type: u8,
+        request: u8,
+        value: u16,
+        index: u16,
+        buf: &mut [u8],
+        timeout: Duration,
+    ) -> crate::Result<usize> {
+        let res = libusb_control_transfer(
+            self.as_raw(),
+            request_type,
+            request,
+            value,
+            index,
+            buf.as_mut_ptr() as *mut c_uchar,
+            buf.len() as u16,
+            timeout.as_millis() as c_uint,
+        );
 
         if res < 0 {
             Err(error::from_libusb(res))
@@ -624,18 +766,59 @@ impl<T: UsbContext> DeviceHandle<T> {
         if request_type & LIBUSB_ENDPOINT_DIR_MASK != LIBUSB_ENDPOINT_OUT {
             return Err(Error::InvalidParam);
         }
-        let res = unsafe {
-            libusb_control_transfer(
-                self.as_raw(),
-                request_type,
-                request,
-                value,
-                index,
-                buf.as_ptr() as *mut c_uchar,
-                buf.len() as u16,
-                timeout.as_millis() as c_uint,
-            )
-        };
+        unsafe { self.write_control_unchecked(request_type, request, value, index, buf, timeout) }
+    }
+
+    /// Writes data using a control transfer.
+    ///
+    /// This function attempts to write the contents of `buf` to the device using a control
+    /// transfer. The function blocks up to the amount of time specified by `timeout`.
+    /// Minimal `timeout` is 1 milliseconds, anything smaller will result in an infinite block.
+    ///
+    /// The parameters `request_type`, `request`, `value`, and `index` specify the fields of the
+    /// control transfer setup packet (`bmRequestType`, `bRequest`, `wValue`, and `wIndex`
+    /// respectively). The values for each of these parameters shall be given in host-endian byte
+    /// order. The value for the `request_type` parameter can be built with the helper function,
+    /// [request_type()](fn.request_type.html). The meaning of the other parameters depends on the
+    /// type of control request.
+    ///
+    /// If the return value is `Ok(n)`, then `n` bytes of `buf` were transfered.
+    ///
+    /// # Safety
+    ///
+    /// Does not check the direction of the endpoint.
+    ///
+    /// ## Errors
+    ///
+    /// If this function encounters any form of error while fulfilling the transfer request, an
+    /// error variant will be returned. If an error variant is returned, no bytes were read.
+    ///
+    /// The errors returned by this function include:
+    ///
+    /// * `InvalidParam` if `request_type` does not specify a write transfer.
+    /// * `Timeout` if the transfer timed out.
+    /// * `Pipe` if the control request was not supported by the device.
+    /// * `NoDevice` if the device has been disconnected.
+    /// * `Io` if the transfer encountered an I/O error.
+    pub unsafe fn write_control_unchecked(
+        &self,
+        request_type: u8,
+        request: u8,
+        value: u16,
+        index: u16,
+        buf: &[u8],
+        timeout: Duration,
+    ) -> crate::Result<usize> {
+        let res = libusb_control_transfer(
+            self.as_raw(),
+            request_type,
+            request,
+            value,
+            index,
+            buf.as_ptr() as *mut c_uchar,
+            buf.len() as u16,
+            timeout.as_millis() as c_uint,
+        );
 
         if res < 0 {
             Err(error::from_libusb(res))
